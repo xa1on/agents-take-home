@@ -414,11 +414,11 @@ Auditing Instructions:
               const auditResultText = auditResponse.content[0].type === "text" ? auditResponse.content[0].text.trim() : "SAFE";
               if (auditResultText.startsWith("VIOLATION")) {
                 auditRetries += 1;
-                resultData = { 
-                  data: { 
-                    status: "error", 
-                    message: `[CLINICAL SAFETY AUDIT REJECTION] Your proposed draft_reply was rejected for violating the clinical advice policy: ${auditResultText}. Please rewrite the draft_reply to contain absolutely zero clinical advice, diagnosis, or treatment suggestions, and redirect all clinical questions to a screening/evaluation. Try calling submit_triage_result again with the corrected draft.` 
-                  } 
+                resultData = {
+                  data: {
+                    status: "error",
+                    message: `[CLINICAL SAFETY AUDIT REJECTION] Your proposed draft_reply was rejected for violating the clinical advice policy: ${auditResultText}. Please rewrite the draft_reply to contain absolutely zero clinical advice, diagnosis, or treatment suggestions, and redirect all clinical questions to a screening/evaluation. Try calling submit_triage_result again with the corrected draft.`
+                  }
                 };
               } else {
                 finalResult = proposedResult;
@@ -427,7 +427,7 @@ Auditing Instructions:
               }
             } else {
               if (proposedResult.draft_reply && auditRetries >= maxAuditRetries) {
-                proposedResult.draft_reply = `Dear family, thank you for reaching out. We have received your inquiry. Due to clinical safety regulations, our staff is unable to provide clinical advice or discuss symptoms over messaging. We would be happy to schedule a comprehensive evaluation or screening to address your concerns directly. An intake coordinator will contact you shortly to assist.`;
+                proposedResult.draft_reply = `[PROVIDED PRE-APPROVED MESSAGE DUE TO CLINICAL SAFETY AUDIT FAILURES]`;
                 proposedResult.decision_rationale += `\n\n[Clinical Safety Override: The drafted reply was modified by our compliance auditor to remove potential clinical advice after multiple audit violations.]`;
               }
               finalResult = proposedResult;
@@ -501,8 +501,8 @@ Auditing Instructions:
   // Option C: Safeguarding (P0) Communication Override (Zero Outbound Communication)
   let finalDraftReply = finalResult.draft_reply;
   if (
-    finalResult.urgency === "P0" || 
-    finalResult.classification === "safeguarding" || 
+    finalResult.urgency === "P0" ||
+    finalResult.classification === "safeguarding" ||
     escalationInfo?.severity === "P0"
   ) {
     finalDraftReply = null;
