@@ -308,9 +308,10 @@ const toolDefinitions = [
           description: "Clear, structured reasoning explaining the classification, urgency, and tool choices."
         }
       },
-      required: ["classification", "urgency", "extracted_intake", "missing_info", "recommended_next_action", "draft_reply", "decision_rationale"]
+      required: ["classification", "urgency", "extracted_intake", "missing_info", "recommended_next_action", "draft_reply", "decision_rationale"],
+      cache_control: { type: "ephemeral" }
     }
-  }
+  } as any
 ];
 
 async function processItem(item: InboxItem, anthropic: Anthropic): Promise<ItemOutput> {
@@ -362,7 +363,13 @@ Body: ${item.body}`;
     model: modelName,
     max_tokens: 2000,
     temperature: 0.1,
-    system: systemPrompt,
+    system: [
+      {
+        type: "text",
+        text: systemPrompt,
+        cache_control: { type: "ephemeral" }
+      } as any
+    ],
     tools: toolDefinitions as any,
     messages
   });
@@ -415,7 +422,13 @@ Auditing Instructions:
                 model: modelName,
                 max_tokens: 150,
                 temperature: 0.0,
-                system: auditSystemPrompt,
+                system: [
+                  {
+                    type: "text",
+                    text: auditSystemPrompt,
+                    cache_control: { type: "ephemeral" }
+                  } as any
+                ],
                 messages: [{ role: "user", content: `Please audit this draft: "${proposedResult.draft_reply}"` }]
               });
 
@@ -495,7 +508,13 @@ Auditing Instructions:
       model: modelName,
       max_tokens: 2000,
       temperature: 0.1,
-      system: systemPrompt,
+      system: [
+        {
+          type: "text",
+          text: systemPrompt,
+          cache_control: { type: "ephemeral" }
+        } as any
+      ],
       tools: toolDefinitions as any,
       messages
     });
