@@ -1,3 +1,5 @@
+import { readFileSync, existsSync } from "node:fs";
+import { resolve } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import type {
   InboxItem,
@@ -21,8 +23,38 @@ import {
   getToolCallsForItem,
 } from "./tools.js";
 
+// Load environment variables from .env if present
+function loadEnv(): void {
+  const envPath = resolve(process.cwd(), ".env");
+  if (existsSync(envPath)) {
+    const content = readFileSync(envPath, "utf8");
+    for (const line of content.split("\n")) {
+      const trimmed = line.trim();
+      if (trimmed && !trimmed.startsWith("#")) {
+        const index = trimmed.indexOf("=");
+        if (index !== -1) {
+          const key = trimmed.substring(0, index).trim();
+          let value = trimmed.substring(index + 1).trim();
+          if (
+            (value.startsWith('"') && value.endsWith('"')) ||
+            (value.startsWith("'") && value.endsWith("'"))
+          ) {
+            value = value.substring(1, value.length - 1);
+          }
+          if (key && !process.env[key]) {
+            process.env[key] = value;
+          }
+        }
+      }
+    }
+  }
+}
+
+loadEnv();
+
 // Retrieve API key from environment variable
 const apiKey = process.env.ANTHROPIC_API_KEY;
+const modelName = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
 
 export async function runAgent(inbox: InboxItem[]): Promise<ItemOutput[]> {
   if (!apiKey) {
@@ -289,7 +321,7 @@ Body: ${item.body}`;
   ];
 
   let response = await anthropic.messages.create({
-    model: "claude-3-5-sonnet-20241022",
+    model: modelName,
     max_tokens: 2000,
     temperature: 0.1,
     system: systemPrompt,
@@ -353,7 +385,7 @@ Body: ${item.body}`;
     messages.push({ role: "user", content: toolResults as any });
 
     response = await anthropic.messages.create({
-      model: "claude-3-5-sonnet-20241022",
+      model: modelName,
       max_tokens: 2000,
       temperature: 0.1,
       system: systemPrompt,
