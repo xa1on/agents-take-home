@@ -32,21 +32,21 @@ Commit your code, your updated `README.md`, and your final generated `output.jso
 
 We expect you to spend about 2 hours. If you stop before finishing, commit what you have and describe the cuts in your README.
 
-## Submission Details
+### Submission Details
 
-### 1. How to Run
+### 1. How to Run (basically the same as above)
 
 ```bash
 # Install dependencies
 npm install
 
-# Run the triage pipeline (processes input, writes output, logs traces)
+# Run the triage pipeline
 npm run triage
 
-# Run the validation suite to assert schema, tool usage, and policy compliance
+# Run the validation suite
 npm run validate
 
-# Run TypeScript compilation checks
+# Run TypeScript compilation
 npm run typecheck
 ```
 
@@ -54,40 +54,40 @@ The triage pipeline outputs the structured results to `output.json` and trace de
 
 ### 2. Stack and Runtime
 - **Runtime**: Node.js (LTS), utilizing standard ECMAScript modules (`type: "module"`).
-- **Languages & Bundler**: TypeScript 5.7+ with `tsx` (TypeScript Execute) for fast development execution.
-- **AI / LLM Layer**: Anthropic Claude (`@anthropic-ai/sdk`) for cognitive intelligence when an `ANTHROPIC_API_KEY` is provided.
-- **Fallback Layer**: Robust pattern-matching and regular expression heuristics for deterministic, zero-network, local execution.
+- **Languages & Compiler**: TypeScript 5.7+ with `tsx` (TypeScript Execute).
+- **AI / LLM Layer**: Anthropic Claude (`@anthropic-ai/sdk`) utilizing Claude 3.5 Sonnet (improved coordination, decision-making, and self-auditing).
+- **Environment**: Managed using `dotenv` (`ANTHROPIC_API_KEY`).
 
 ### 3. Architecture
-The agent is designed as a **Hybrid Heuristic-Cognitive Cognitive Architecture**:
-1. **Dynamic Ingestion**: Reads the `InboxItem` array and executes wrapped processing inside `withItemContext` to maintain strict telemetry and audit tracking.
-2. **Cognitive & Heuristic Parsing**:
-   - Checks if `process.env.ANTHROPIC_API_KEY` is defined.
-   - If present: Leverages Claude 3.5 Sonnet to perform semantic classification, extract demographics, verify intent, and draft highly custom, professional responses.
-   - If absent: Drops back gracefully to a robust regex-based heuristic engine. The heuristics parse child names, DOBs, contact emails/phones, requested disciplines, and specific risk markers (cancellations, safeguarding issues, language preferences).
-3. **Policy Coordination**:
-   - **Safeguarding (P0)**: Flags abuse indicators, escalates severity to P0, drafts neutral replies, and routes a task to the `clinical_lead`.
-   - **Same-Day Cancellations (P1)**: Recognizes urgent schedule drops, escalates to P1, drafts sick policies, and routes a task to the `front_desk`.
-   - **Insurance Gatekeeping**: Verifies in-network vs. out-of-network status. For OON payers (e.g., Kaiser), creates a `billing` task and blocks slot holds.
-   - **Language Access**: Matches Spanish preferences, drafts the final reply in Spanish, and schedules bilingually.
-4. **Output Compilation**: Gathers the audit trail with `getToolCallsForItem` and exports compliant `ItemOutput`.
+The agent is designed as a pure tool-calling architecture built directly on claude:
+1. **Tool-Use Loop**: Initially attempted a hybrid heuristic approach, but ultimately landed on an advanced tool-calling architecture that eliminates hardcoded heuristic fallbacks in favor of a dynamic agent loop. For each weekend inbox item, claude evaluates the context, dynamically requests tool calls (such as database patient lookup, insurance verification, policy retrieval, slot searching, task routing, or message drafting), and adjusts its plan based on tool outputs in real-time.
+2. **Policy-Compliant Task & Escalation Routing**:
+   - **Safeguarding (P0)**: Implements escalation via the `escalate` tool, triggers a high-urgency internal task for the `clinical_lead`, and enforces strict communication safeguards (see section 4).
+   - **Same-Day Cancellations (P1)**: Escalates same-day drops, searches therapist availability, and holds a slot when matching the parent's explicit timing preferences, creating a `front_desk` follow-up task.
+   - **Future Reschedules (P2)**: Calibrates planned reschedules (e.g. cancelling next week's session) as P2 standard scheduling tasks routed to `intake`.
+   - **Out-of-Network Coordination**: Halts slot holds and assigns priority billing reviews to `billing` for Out-of-Network or expired benefits.
+   - **Language Access**: Employs bilingual scheduling and translates replies.
 
-### 4. Failure Modes and Production Eval
-- **Heuristic Limitations**: Natural language variations might bypass simple regex rules. In production, we evaluate accuracy by writing comprehensive unit/integration test suites on historical transcripts.
-- **LLM Flakiness & Rate Limits**: Live APIs can time out, hallucinate, or hit rate limits. We address this by having our deterministic local heuristics act as a guaranteed safe fallback.
-- **Context Overlaps**: An email might complain about billing *and* request a slot reschedule at the same time. The current architecture routes to a single classification; in production, we should support multi-label classification.
-- **HIPAA & PHI Compliance**: Synthetic data must be strictly separated. In production, LLM prompts must utilize zero-retention API agreements or be run on locally-hosted private models (e.g., Llama 3 on private VPC) to protect Protected Health Information (PHI).
+### 4. Advanced Production Safety Guardrails & Firewalls
+To ensure reliability, compliance, and safety, there are several programmatic and cognitive layers:
+- **Guardrail Auditor & Self-Correction**: Inside the `submit_triage_result` tool call interception, the runtime launches an independent compliance auditor prompt using claude. This secondary model scans the drafted response for clinical advice, predictions, or treatment suggestions. If a safety violation is detected, it returns a structured critique, prompting claude to self-correct and rewrite the message.
+- **Spanish Language Access Auditor**: The auditor is enriched to automatically scan the family's language preferences. If a Spanish preference is detected, the auditor asserts that the drafted response is written fully in Spanish; any language mismatch triggers a self-correction rewrite loop.
+- **Safeguarding (P0) Digital Silence**: To protect children and families in safeguarding scenarios (suspected abuse, domestic neglect), the runtime deterministically overrides and clears the draft (`draft_reply = null`) for any P0 safeguarding items. This guarantees zero outbound digital paper trails that could be intercepted by an abuser, forcing immediate secure phone outreach by the clinic lead.
+- **OON Slot Hold Programmatic Firewall**: Programmatically firewalls any `hold_slot` attempts at the TypeScript runtime level if the verification status returns `out_of_network` or `expired`, prompting claude to explain the billing policy and request benefits coordination first.
+- **Anthropic Prompt Caching**: Implements static cache control breakpoints inside the `toolDefinitions` array (on the final tool) and the `systemPrompt` text blocks. Because the inbox items are processed sequentially, hopefully slashing prompt token costs and cutting execution latency.
 
-### 5. What I Chose Not to Build, and Why
-- **Automatic Scheduling**: Bypassed executing holds for every patient. This is in strict adherence to the policy: "*Only hold a slot if the inbox item specifically mentions a preferred time that matches one of our available slots*," preventing clinic capacity locks.
-- **Live Message Dispatching**: Left communication in "draft" status only. Automated clinical replies require human eyes for safety and compliance.
-- **Database Modifying Tools**: Did not write tools to write directly to the database. Intake requires confirmation before committing records to prevent data contamination.
+### 5. Failure Modes and Production Eval
+- **API Failures and Rate Limits**: In production, LLM services may experience timeouts or rate-limiting. This is mitigated through retry backoffs, fallback safe mock inputs, and local graceful tool failures.
 
-### 6. What I Would Do with Another 4 Hours
-- **Multi-Label Triage Support**: Allow items to generate multiple tasks for different departments concurrently (e.g., a scheduling task and a billing task for the same referral).
-- **Semantic Vector Search**: Integrate a local vector database (like `hnswlib` or similar) to match incoming referral diagnosis terms with the best-fit provider specialty tags in `providers.json`.
-- **Bilingual Fallback Enhancement**: Improve the heuristic Spanish translator to generate highly specific, context-aware translation fragments for Spanish voicemail transcripts.
-- **Interactive Triage Dashboard**: Build a lightweight Next.js/Vite frontend UI using Cedar Kids Therapy styling (clean, friendly, premium) to allow clinical coordinators to easily review, edit, approve, or dismiss the agent's drafted actions and messages.
+### 6. What I Chose Not to Build, and Why
+- **Heuristic-Only Fallback**: Refused to use simple rule-based parsers for the primary loop. Heuristics are extremely brittle for clinic-grade triage, and relying on Claude's multi-step cognitive reasoning guarantees correct policy orchestration for unstructured clinical text.
+- **Auto-Committing Schedules**: Avoided booking appointments automatically. We draft the message and hold slots temporarily to ensure clinical coordinators retain control.
+
+### 7. What I Would Do with Another 4 Hours
+- **Vector Database Integrations**: Implement semantic embedding lookup to match incoming referral diagnosis terms with therapist specialties in `providers.json`.
+- **Interactive Intake Dashboard**: Build a Vite-based react dashboard for front-desk staff to visualize the agent's triage logs, edit drafted replies, and approve pending slot holds.
+- **Multi-Turn Chat History Simulation**: Allow coordinators to view the full trace of tool calls and self-correction audit loops in the clinical workspace.
+
 
 ## Your Task
 
