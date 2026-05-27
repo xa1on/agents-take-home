@@ -32,7 +32,10 @@ export async function runAgent(inbox: InboxItem[]): Promise<ItemOutput[]> {
     );
   }
 
-  const anthropic = new Anthropic({ apiKey });
+  const anthropic = new Anthropic({
+    apiKey,
+    maxRetries: 3, // Enforces up to 3 retries with built-in exponential backoff for transient 429/500/529 errors
+  });
   const outputs: ItemOutput[] = [];
 
   for (const item of inbox) {
