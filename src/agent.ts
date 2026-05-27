@@ -1,5 +1,4 @@
-import { readFileSync, existsSync } from "node:fs";
-import { resolve } from "node:path";
+import "dotenv/config";
 import Anthropic from "@anthropic-ai/sdk";
 import type {
   InboxItem,
@@ -23,43 +22,14 @@ import {
   getToolCallsForItem,
 } from "./tools.js";
 
-// Load environment variables from .env if present
-function loadEnv(): void {
-  const envPath = resolve(process.cwd(), ".env");
-  if (existsSync(envPath)) {
-    const content = readFileSync(envPath, "utf8");
-    for (const line of content.split("\n")) {
-      const trimmed = line.trim();
-      if (trimmed && !trimmed.startsWith("#")) {
-        const index = trimmed.indexOf("=");
-        if (index !== -1) {
-          const key = trimmed.substring(0, index).trim();
-          let value = trimmed.substring(index + 1).trim();
-          if (
-            (value.startsWith('"') && value.endsWith('"')) ||
-            (value.startsWith("'") && value.endsWith("'"))
-          ) {
-            value = value.substring(1, value.length - 1);
-          }
-          if (key && !process.env[key]) {
-            process.env[key] = value;
-          }
-        }
-      }
-    }
-  }
-}
-
-loadEnv();
-
-// Retrieve API key from environment variable
+// Retrieve API key and model configuration from loaded environment variables
 const apiKey = process.env.ANTHROPIC_API_KEY;
 const modelName = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
 
 export async function runAgent(inbox: InboxItem[]): Promise<ItemOutput[]> {
   if (!apiKey) {
     throw new Error(
-      "APIKeyMissingError: ANTHROPIC_API_KEY environment variable is not defined. A live Anthropic Claude API key is required to execute this agent without heuristics.",
+      "APIKeyMissingError: ANTHROPIC_API_KEY environment variable is not defined. A live Anthropic Claude API key is required to execute this agent.",
     );
   }
 
@@ -252,11 +222,101 @@ const toolDefinitions = [
       required: ["item_id", "reason", "severity"],
     },
   },
+  {
+    name: "submit_triage_result",
+    description: "Submit the final structured triage analysis block for this inbox item. Call this tool ONLY after you have completed all background tool calls (like search_patient, verify_insurance, create_task, draft_message, etc.) and are ready to finalize your triage.",
+    input_schema: {
+      type: "object",
+      properties: {
+        classification: {
+          type: "string",
+          enum: [
+            "new_referral",
+            "existing_patient_request",
+            "scheduling",
+            "clinical_question",
+            "billing_question",
+            "missing_paperwork",
+            "provider_followup",
+            "complaint",
+            "safeguarding",
+            "spam",
+            "other"
+          ],
+          description: "The triage classification for this inbox item."
+        },
+        urgency: {
+          type: "string",
+          enum: ["P0", "P1", "P2", "P3"],
+          description: "The calibrated urgency level."
+        },
+        extracted_intake: {
+          type: "object",
+          properties: {
+            child_name: {
+              anyOf: [{ type: "string" }, { type: "null" }],
+              description: "Extracted name of the child/patient."
+            },
+            dob_or_age: {
+              anyOf: [{ type: "string" }, { type: "null" }],
+              description: "Extracted date of birth or age details."
+            },
+            parent_contact: {
+              anyOf: [{ type: "string" }, { type: "null" }],
+              description: "Extracted parent contact details (name, email, phone)."
+            },
+            discipline: {
+              anyOf: [
+                {
+                  type: "array",
+                  items: { type: "string", enum: ["SLP", "OT", "PT"] },
+                  minItems: 1
+                },
+                { type: "null" }
+              ],
+              description: "List of requested disciplines."
+            },
+            diagnosis_or_concern: {
+              anyOf: [{ type: "string" }, { type: "null" }],
+              description: "The child's diagnosis or core clinical concern."
+            },
+            payer: {
+              anyOf: [{ type: "string" }, { type: "null" }],
+              description: "Verified or stated insurance payer."
+            },
+            member_id: {
+              anyOf: [{ type: "string" }, { type: "null" }],
+              description: "Stated or verified member ID."
+            }
+          },
+          required: ["child_name", "dob_or_age", "parent_contact", "discipline", "diagnosis_or_concern", "payer", "member_id"]
+        },
+        missing_info: {
+          type: "array",
+          items: { type: "string" },
+          description: "List of missing critical fields from: child_name, dob_or_age, parent_contact, payer."
+        },
+        recommended_next_action: {
+          type: "string",
+          description: "Specific, actionable, high-quality next step for staff."
+        },
+        draft_reply: {
+          anyOf: [{ type: "string" }, { type: "null" }],
+          description: "Draft response to the family or the pediatrician office."
+        },
+        decision_rationale: {
+          type: "string",
+          description: "Clear, structured reasoning explaining the classification, urgency, and tool choices."
+        }
+      },
+      required: ["classification", "urgency", "extracted_intake", "missing_info", "recommended_next_action", "draft_reply", "decision_rationale"]
+    }
+  }
 ];
 
 async function processItem(item: InboxItem, anthropic: Anthropic): Promise<ItemOutput> {
   const systemPrompt = `You are an expert clinical intake triage agent for Cedar Kids Therapy, practicing on Monday, April 27, 2026.
-Your goal is to triage the inbox item, coordinate with the clinic tools step-by-step, make decisions in alignment with clinic policies, and return a final structured evaluation.
+Your goal is to triage the inbox item, coordinate with the clinic tools step-by-step, make decisions in alignment with clinic policies, and finalize your work by calling submit_triage_result.
 
 Clinic Policies:
 1. SERVICE LINES: Serves children ages 0-18 for SLP, OT, and PT. Confirm the requested discipline before scheduling.
@@ -285,28 +345,7 @@ Triage Protocol (MUST Follow These Steps in Order):
    - billing for out-of-network benefits reviews.
    - intake for normal scheduling or missing paperwork follow-ups.
 7. DRAFT RESPONSE: Draft a professional, empathetic message to the parent (or referring pediatrician office if critical demographics are missing) using draft_message.
-8. SUMMARIZE: After all tool interactions have concluded, output a single JSON block conforming exactly to the Cedar Kids Triage output schema. Your final response MUST be ONLY this JSON block, enclosed inside \`\`\`json ... \`\`\` code block.
-
-JSON Structure:
-{
-  "classification": "new_referral" | "existing_patient_request" | "scheduling" | "clinical_question" | "billing_question" | "missing_paperwork" | "provider_followup" | "complaint" | "safeguarding" | "spam" | "other",
-  "urgency": "P0" | "P1" | "P2" | "P3",
-  "requires_human_review": true,
-  "extracted_intake": {
-    "child_name": string | null,
-    "dob_or_age": string | null,
-    "parent_contact": string | null,
-    "discipline": ("SLP" | "OT" | "PT")[] | null,
-    "diagnosis_or_concern": string | null,
-    "payer": string | null,
-    "member_id": string | null
-  },
-  "missing_info": string[],
-  "recommended_next_action": string,
-  "draft_reply": string | null,
-  "decision_rationale": string
-}
-Note: You do not need to list task_ids, tools_called, or escalation in the JSON output, as they are tracked and filled directly by the runtime pipeline.`;
+8. FINALIZE: You MUST call submit_triage_result to complete the triage process and return the final structured results. Do not stop calling tools until you call submit_triage_result.`;
 
   const userMessage = `Please triage this inbox item:
 ID: ${item.id}
@@ -331,19 +370,26 @@ Body: ${item.body}`;
 
   const taskIds: string[] = [];
   let escalationInfo: { reason: string; severity: "P0" | "P1" } | null = null;
+  let finalResult: any = null;
 
   // Tool coordination loop
   while (response.stop_reason === "tool_use") {
     messages.push({ role: "assistant", content: response.content });
 
     const toolResults: any[] = [];
+    let shouldBreak = false;
+
     for (const contentBlock of response.content) {
       if (contentBlock.type === "tool_use") {
         const { name, input, id } = contentBlock;
         let resultData: any;
 
         try {
-          if (name === "search_patient") {
+          if (name === "submit_triage_result") {
+            finalResult = input;
+            shouldBreak = true;
+            resultData = { data: { status: "success", message: "Triage result received successfully." } };
+          } else if (name === "search_patient") {
             resultData = await search_patient(input as any);
           } else if (name === "verify_insurance") {
             resultData = await verify_insurance(input as any);
@@ -384,6 +430,10 @@ Body: ${item.body}`;
 
     messages.push({ role: "user", content: toolResults as any });
 
+    if (shouldBreak) {
+      break;
+    }
+
     response = await anthropic.messages.create({
       model: modelName,
       max_tokens: 2000,
@@ -394,35 +444,27 @@ Body: ${item.body}`;
     });
   }
 
-  // Parse structured outputs from the final text block
-  const content = response.content[0].type === "text" ? response.content[0].text : "";
-  const jsonStart = content.indexOf("{");
-  const jsonEnd = content.lastIndexOf("}");
-  
-  if (jsonStart === -1 || jsonEnd === -1) {
+  if (!finalResult) {
     throw new Error(
-      `TriageFormatError: Claude did not output a valid JSON block inside the final block. Final Text: ${content}`,
+      `TriageFormatError: Claude completed the tool loop but failed to call submit_triage_result.`,
     );
   }
-
-  const rawJson = content.substring(jsonStart, jsonEnd + 1);
-  const parsed = JSON.parse(rawJson);
 
   // Retrieve exact tool calls logged for this item
   const toolsCalled = getToolCallsForItem(item.id);
 
   return {
     item_id: item.id,
-    classification: parsed.classification as Classification,
-    urgency: parsed.urgency as Urgency,
+    classification: finalResult.classification as Classification,
+    urgency: finalResult.urgency as Urgency,
     requires_human_review: true,
-    extracted_intake: parsed.extracted_intake,
-    missing_info: parsed.missing_info || [],
+    extracted_intake: finalResult.extracted_intake,
+    missing_info: finalResult.missing_info || [],
     tools_called: toolsCalled,
-    recommended_next_action: parsed.recommended_next_action,
-    draft_reply: parsed.draft_reply,
+    recommended_next_action: finalResult.recommended_next_action,
+    draft_reply: finalResult.draft_reply,
     task_ids: taskIds,
     escalation: escalationInfo,
-    decision_rationale: parsed.decision_rationale,
+    decision_rationale: finalResult.decision_rationale,
   };
 }
