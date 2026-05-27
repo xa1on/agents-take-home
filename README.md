@@ -46,6 +46,9 @@ npm run triage
 # Run the validation suite
 npm run validate
 
+# Run the safety & production evaluation suite
+npm run evaluate
+
 # Run TypeScript compilation
 npm run typecheck
 ```
@@ -67,7 +70,7 @@ The agent is designed as a pure tool-calling architecture built directly on clau
    - **Future Reschedules (P2)**: Calibrates planned reschedules (e.g. cancelling next week's session) as P2 standard scheduling tasks routed to `intake`.
    - **Out-of-Network Coordination**: Halts slot holds and assigns priority billing reviews to `billing` for Out-of-Network or expired benefits.
    - **Language Access**: Employs bilingual scheduling and translates replies.
-3. **Structured Outputs via Tool Calls**: Created a fake tool called `submit_triage_result` that Claude 3.5 Sonnet calls at the end of its reasoning loop to submit the triage result to the runtime. This tool call is intercepted by the runtime and used to generate the final output.json and trace.json files. This ensures that the output is always in the correct format and that the trace is always generated. This is also better than utilziing the standard Anthropic `output` parameter because it allows us to control the output schema and the trace is always generated.
+3. **Structured Outputs via Tool Calls**: Created a "fake" tool called `submit_triage_result` that Claude 3.5 Sonnet calls at the end of its reasoning loop to submit the triage result to the runtime. This tool call is intercepted by the runtime and used to generate the final output.json and trace.json files. This ensures that the output is always in the correct format and that the trace is always generated. This is also better than utilziing the standard Anthropic `output` parameter because it allows us to control the output schema and the trace is always generated.
 
 ### 4. Advanced Production Safety Guardrails & Firewalls
 To ensure reliability, compliance, and safety, there are several programmatic and cognitive layers:
@@ -78,11 +81,12 @@ To ensure reliability, compliance, and safety, there are several programmatic an
 - **Anthropic Prompt Caching**: Implements static cache control breakpoints inside the `toolDefinitions` array (on the final tool) and the `systemPrompt` text blocks. Because the inbox items are processed sequentially, hopefully slashing prompt token costs and cutting execution latency.
 
 ### 5. Failure Modes and Production Eval
-- **API Failures and Rate Limits**: In production, LLM services may experience timeouts or rate-limiting. This is mitigated through retry backoffs, fallback safe mock inputs, and local graceful tool failures.
+*   **Resiliency to Outages and Backend Failures**: API timeouts and rate-limiting are handled using exponential backoffs. If a critical clinical database or verification tool fails (e.g. timeout on `search_patient`), the runtime captures the error and passes it back to Claude. The agent cognitively adapts by completing triage with detailed instructions inside the internal task notes and `missing_info` fields to alert staff.
+*   **Executable Compliance & Safety Suite (`src/evaluate_failures.ts`)**: To validate safety guardrails, there is an evaluation suite run via `npm run evaluate`. This suite directly asserts compliance against our golden triage outputs to verify P0 safeguarding digital silence (forcing `draft_reply = null` for abuse cases), the out-of-network slot hold firewall, same-day cancellation escalations, bilingual Spanish translation preference matches, and strict redirection of clinical advice questions.
 
 ### 6. What I Chose Not to Build, and Why
 - **Heuristic-Only Fallback**: Refused to use simple rule-based parsers for the primary loop. Heuristics are extremely brittle for clinic-grade triage, and relying on Claude's multi-step cognitive reasoning guarantees correct policy orchestration for unstructured clinical text.
-- **Auto-Committing Schedules**: Avoided booking appointments automatically. We draft the message and hold slots temporarily to ensure clinical coordinators retain control.
+- **Auto-Committing Schedules**: Avoided booking appointments automatically. The agent draft the message and hold slots temporarily to ensure clinical coordinators retain control.
 
 ### 7. What I Would Do with Another 4 Hours
 - **Vector Database Integrations**: Implement semantic embedding lookup to match incoming referral diagnosis terms with therapist specialties in `providers.json`.
