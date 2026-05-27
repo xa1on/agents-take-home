@@ -32,14 +32,62 @@ Commit your code, your updated `README.md`, and your final generated `output.jso
 
 We expect you to spend about 2 hours. If you stop before finishing, commit what you have and describe the cuts in your README.
 
-Update this README with these sections before submitting:
+## Submission Details
 
-1. How to run
-2. Stack and runtime
-3. Architecture
-4. Failure modes and production eval
-5. What I chose not to build, and why
-6. What I would do with another 4 hours
+### 1. How to Run
+
+```bash
+# Install dependencies
+npm install
+
+# Run the triage pipeline (processes input, writes output, logs traces)
+npm run triage
+
+# Run the validation suite to assert schema, tool usage, and policy compliance
+npm run validate
+
+# Run TypeScript compilation checks
+npm run typecheck
+```
+
+The triage pipeline outputs the structured results to `output.json` and trace details to `.trace/tool-calls.jsonl`.
+
+### 2. Stack and Runtime
+- **Runtime**: Node.js (LTS), utilizing standard ECMAScript modules (`type: "module"`).
+- **Languages & Bundler**: TypeScript 5.7+ with `tsx` (TypeScript Execute) for fast development execution.
+- **AI / LLM Layer**: Anthropic Claude (`@anthropic-ai/sdk`) for cognitive intelligence when an `ANTHROPIC_API_KEY` is provided.
+- **Fallback Layer**: Robust pattern-matching and regular expression heuristics for deterministic, zero-network, local execution.
+
+### 3. Architecture
+The agent is designed as a **Hybrid Heuristic-Cognitive Cognitive Architecture**:
+1. **Dynamic Ingestion**: Reads the `InboxItem` array and executes wrapped processing inside `withItemContext` to maintain strict telemetry and audit tracking.
+2. **Cognitive & Heuristic Parsing**:
+   - Checks if `process.env.ANTHROPIC_API_KEY` is defined.
+   - If present: Leverages Claude 3.5 Sonnet to perform semantic classification, extract demographics, verify intent, and draft highly custom, professional responses.
+   - If absent: Drops back gracefully to a robust regex-based heuristic engine. The heuristics parse child names, DOBs, contact emails/phones, requested disciplines, and specific risk markers (cancellations, safeguarding issues, language preferences).
+3. **Policy Coordination**:
+   - **Safeguarding (P0)**: Flags abuse indicators, escalates severity to P0, drafts neutral replies, and routes a task to the `clinical_lead`.
+   - **Same-Day Cancellations (P1)**: Recognizes urgent schedule drops, escalates to P1, drafts sick policies, and routes a task to the `front_desk`.
+   - **Insurance Gatekeeping**: Verifies in-network vs. out-of-network status. For OON payers (e.g., Kaiser), creates a `billing` task and blocks slot holds.
+   - **Language Access**: Matches Spanish preferences, drafts the final reply in Spanish, and schedules bilingually.
+4. **Output Compilation**: Gathers the audit trail with `getToolCallsForItem` and exports compliant `ItemOutput`.
+
+### 4. Failure Modes and Production Eval
+- **Heuristic Limitations**: Natural language variations might bypass simple regex rules. In production, we evaluate accuracy by writing comprehensive unit/integration test suites on historical transcripts.
+- **LLM Flakiness & Rate Limits**: Live APIs can time out, hallucinate, or hit rate limits. We address this by having our deterministic local heuristics act as a guaranteed safe fallback.
+- **Context Overlaps**: An email might complain about billing *and* request a slot reschedule at the same time. The current architecture routes to a single classification; in production, we should support multi-label classification.
+- **HIPAA & PHI Compliance**: Synthetic data must be strictly separated. In production, LLM prompts must utilize zero-retention API agreements or be run on locally-hosted private models (e.g., Llama 3 on private VPC) to protect Protected Health Information (PHI).
+
+### 5. What I Chose Not to Build, and Why
+- **Automatic Scheduling**: Bypassed executing holds for every patient. This is in strict adherence to the policy: "*Only hold a slot if the inbox item specifically mentions a preferred time that matches one of our available slots*," preventing clinic capacity locks.
+- **Live Message Dispatching**: Left communication in "draft" status only. Automated clinical replies require human eyes for safety and compliance.
+- **Database Modifying Tools**: Did not write tools to write directly to the database. Intake requires confirmation before committing records to prevent data contamination.
+
+### 6. What I Would Do with Another 4 Hours
+- **Multi-Label Triage Support**: Allow items to generate multiple tasks for different departments concurrently (e.g., a scheduling task and a billing task for the same referral).
+- **Semantic Vector Search**: Integrate a local vector database (like `hnswlib` or similar) to match incoming referral diagnosis terms with the best-fit provider specialty tags in `providers.json`.
+- **Bilingual Fallback Enhancement**: Improve the heuristic Spanish translator to generate highly specific, context-aware translation fragments for Spanish voicemail transcripts.
+- **Interactive Triage Dashboard**: Build a lightweight Next.js/Vite frontend UI using Cedar Kids Therapy styling (clean, friendly, premium) to allow clinical coordinators to easily review, edit, approve, or dismiss the agent's drafted actions and messages.
 
 ## Your Task
 
