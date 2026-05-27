@@ -60,13 +60,14 @@ The triage pipeline outputs the structured results to `output.json` and trace de
 
 ### 3. Architecture
 The agent is designed as a pure tool-calling architecture built directly on claude:
-1. **Tool-Use Loop**: Initially attempted a hybrid heuristic approach, but ultimately landed on an advanced tool-calling architecture that eliminates hardcoded heuristic fallbacks in favor of a dynamic agent loop. For each weekend inbox item, claude evaluates the context, dynamically requests tool calls (such as database patient lookup, insurance verification, policy retrieval, slot searching, task routing, or message drafting), and adjusts its plan based on tool outputs in real-time.
+1. **Tool-Use Loop**: Initially attempted a hybrid heuristic approach, but ultimately landed on an advanced tool-calling architecture to avoid hardcoded heuristic fallbacks in favor of an agent loop. For each weekend inbox item, claude evaluates the context, dynamically requests tool calls (such as database patient lookup, insurance verification, policy retrieval, slot searching, task routing, or message drafting), and adjusts its plan based on tool outputs in real-time.
 2. **Policy-Compliant Task & Escalation Routing**:
    - **Safeguarding (P0)**: Implements escalation via the `escalate` tool, triggers a high-urgency internal task for the `clinical_lead`, and enforces strict communication safeguards (see section 4).
    - **Same-Day Cancellations (P1)**: Escalates same-day drops, searches therapist availability, and holds a slot when matching the parent's explicit timing preferences, creating a `front_desk` follow-up task.
    - **Future Reschedules (P2)**: Calibrates planned reschedules (e.g. cancelling next week's session) as P2 standard scheduling tasks routed to `intake`.
    - **Out-of-Network Coordination**: Halts slot holds and assigns priority billing reviews to `billing` for Out-of-Network or expired benefits.
    - **Language Access**: Employs bilingual scheduling and translates replies.
+3. **Structured Outputs via Tool Calls**: Created a fake tool called `submit_triage_result` that Claude 3.5 Sonnet calls at the end of its reasoning loop to submit the triage result to the runtime. This tool call is intercepted by the runtime and used to generate the final output.json and trace.json files. This ensures that the output is always in the correct format and that the trace is always generated. This is also better than utilziing the standard Anthropic `output` parameter because it allows us to control the output schema and the trace is always generated.
 
 ### 4. Advanced Production Safety Guardrails & Firewalls
 To ensure reliability, compliance, and safety, there are several programmatic and cognitive layers:
