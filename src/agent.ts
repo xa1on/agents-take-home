@@ -327,7 +327,7 @@ Clinic Policies:
    - Policy: Verified status from billing systems (via verify_insurance) supersedes payer info on documents. Surface discrepancies.
 3. SAFEGUARDING: Any disclosure suggesting harm, abuse, neglect, or unsafe caregiving is P0. Escalate immediately (using escalate tool), create a task for the clinical_lead, and draft a neutral acknowledgment message (do not provide investigative advice).
 4. CLINICAL ADVICE: Systems must not provide clinical advice over message. Clinical questions should be routed to screenings/evals. Draft replies can suggest these screens/evals.
-5. SCHEDULING: Same-day cancellations or reschedules are P1 operational issues. Escalate to P1, find slots, and hold a slot ONLY if the parent explicitly mentions a preferred time that matches an available slot. Create front_desk task.
+5. SCHEDULING: Same-day cancellations or reschedules are P1 operational issues. Escalate to P1, find slots, and hold a slot ONLY if the parent explicitly mentions a preferred time that matches an available slot. Create front_desk task. Planned, future rescheduling requests (e.g. cancelling next week's session) must be calibrated as P2 (Standard Scheduling) and routed to intake.
 6. LANGUAGE ACCESS: Spanish communication preference should be matched with a bilingual provider, and the response must be drafted in Spanish.
 
 Triage Protocol (MUST Follow These Steps in Order):
@@ -371,6 +371,8 @@ Body: ${item.body}`;
   const taskIds: string[] = [];
   let escalationInfo: { reason: string; severity: "P0" | "P1" } | null = null;
   let finalResult: any = null;
+  let auditRetries = 0;
+  const maxAuditRetries = 2;
 
   // Tool coordination loop
   while (response.stop_reason === "tool_use") {
@@ -386,9 +388,52 @@ Body: ${item.body}`;
 
         try {
           if (name === "submit_triage_result") {
-            finalResult = input;
-            shouldBreak = true;
-            resultData = { data: { status: "success", message: "Triage result received successfully." } };
+            const proposedResult = input as any;
+
+            if (proposedResult.draft_reply && auditRetries < maxAuditRetries) {
+              const auditSystemPrompt = `You are an expert clinical safety compliance auditor at Cedar Kids Therapy. 
+Your task is to audit the drafted response to verify that it does NOT violate our clinical advice policy.
+
+Clinical Advice Policy: Staff and automated systems must NOT provide clinical advice, medical diagnoses, prognosis, or treatment/therapy plans over messaging. Clinical questions must be redirected to evaluations, screenings, or clinician reviews.
+
+Auditing Instructions:
+- Carefully read the draft.
+- If the draft suggests a diagnosis, prognosis, clinical cause, or specifies treatment details, it is a VIOLATION.
+- If the draft redirects clinical questions to a screening or evaluation without offering advice, it is SAFE.
+- Output exactly 'SAFE' if compliant.
+- Output 'VIOLATION: <detailed explanation>' if it violates the policy. Do not include any other text.`;
+
+              const auditResponse = await anthropic.messages.create({
+                model: modelName,
+                max_tokens: 150,
+                temperature: 0.0,
+                system: auditSystemPrompt,
+                messages: [{ role: "user", content: `Please audit this draft: "${proposedResult.draft_reply}"` }]
+              });
+
+              const auditResultText = auditResponse.content[0].type === "text" ? auditResponse.content[0].text.trim() : "SAFE";
+              if (auditResultText.startsWith("VIOLATION")) {
+                auditRetries += 1;
+                resultData = { 
+                  data: { 
+                    status: "error", 
+                    message: `[CLINICAL SAFETY AUDIT REJECTION] Your proposed draft_reply was rejected for violating the clinical advice policy: ${auditResultText}. Please rewrite the draft_reply to contain absolutely zero clinical advice, diagnosis, or treatment suggestions, and redirect all clinical questions to a screening/evaluation. Try calling submit_triage_result again with the corrected draft.` 
+                  } 
+                };
+              } else {
+                finalResult = proposedResult;
+                shouldBreak = true;
+                resultData = { data: { status: "success", message: "Triage result received successfully." } };
+              }
+            } else {
+              if (proposedResult.draft_reply && auditRetries >= maxAuditRetries) {
+                proposedResult.draft_reply = `Dear family, thank you for reaching out. We have received your inquiry. Due to clinical safety regulations, our staff is unable to provide clinical advice or discuss symptoms over messaging. We would be happy to schedule a comprehensive evaluation or screening to address your concerns directly. An intake coordinator will contact you shortly to assist.`;
+                proposedResult.decision_rationale += `\n\n[Clinical Safety Override: The drafted reply was modified by our compliance auditor to remove potential clinical advice after multiple audit violations.]`;
+              }
+              finalResult = proposedResult;
+              shouldBreak = true;
+              resultData = { data: { status: "success", message: "Triage result received successfully." } };
+            }
           } else if (name === "search_patient") {
             resultData = await search_patient(input as any);
           } else if (name === "verify_insurance") {
@@ -453,6 +498,16 @@ Body: ${item.body}`;
   // Retrieve exact tool calls logged for this item
   const toolsCalled = getToolCallsForItem(item.id);
 
+  // Option C: Safeguarding (P0) Communication Override (Zero Outbound Communication)
+  let finalDraftReply = finalResult.draft_reply;
+  if (
+    finalResult.urgency === "P0" || 
+    finalResult.classification === "safeguarding" || 
+    escalationInfo?.severity === "P0"
+  ) {
+    finalDraftReply = null;
+  }
+
   return {
     item_id: item.id,
     classification: finalResult.classification as Classification,
@@ -462,7 +517,7 @@ Body: ${item.body}`;
     missing_info: finalResult.missing_info || [],
     tools_called: toolsCalled,
     recommended_next_action: finalResult.recommended_next_action,
-    draft_reply: finalResult.draft_reply,
+    draft_reply: finalDraftReply,
     task_ids: taskIds,
     escalation: escalationInfo,
     decision_rationale: finalResult.decision_rationale,
