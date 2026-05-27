@@ -22,7 +22,6 @@ import {
   getToolCallsForItem,
 } from "./tools.js";
 
-// Retrieve API key and model configuration from loaded environment variables
 const apiKey = process.env.ANTHROPIC_API_KEY;
 const modelName = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
 
@@ -373,6 +372,7 @@ Body: ${item.body}`;
   let finalResult: any = null;
   let auditRetries = 0;
   const maxAuditRetries = 2;
+  let verifiedStatus: string | null = null;
 
   // Tool coordination loop
   while (response.stop_reason === "tool_use") {
@@ -391,13 +391,21 @@ Body: ${item.body}`;
             const proposedResult = input as any;
 
             if (proposedResult.draft_reply && auditRetries < maxAuditRetries) {
-              const auditSystemPrompt = `You are an expert clinical safety compliance auditor at Cedar Kids Therapy. 
-Your task is to audit the drafted response to verify that it does NOT violate our clinical advice policy.
+              const isSpanish = item.body.toLowerCase().includes("spanish") || item.body.toLowerCase().includes("español") || item.subject.toLowerCase().includes("spanish") || item.subject.toLowerCase().includes("español");
+              const languageConstraint = isSpanish
+                ? "REQUIRED RESPONSE LANGUAGE: Spanish (español). The family prefers Spanish communication, so the draft response must be fully written in Spanish. If it is in English or any other language, it is a strict safety VIOLATION."
+                : "REQUIRED RESPONSE LANGUAGE: English. The draft response must be written in English. If it is in Spanish or any other language, it is a strict safety VIOLATION.";
 
-Clinical Advice Policy: Staff and automated systems must NOT provide clinical advice, medical diagnoses, prognosis, or treatment/therapy plans over messaging. Clinical questions must be redirected to evaluations, screenings, or clinician reviews.
+              const auditSystemPrompt = `You are an expert clinical safety compliance auditor at Cedar Kids Therapy. 
+Your task is to audit the drafted response to verify that it does NOT violate our clinical safety policies.
+
+Clinical Safety Policies:
+1. Clinical Advice Policy: Staff and automated systems must NOT provide clinical advice, medical diagnoses, prognosis, or treatment/therapy plans over messaging. Clinical questions must be redirected to evaluations, screenings, or clinician reviews.
+2. ${languageConstraint}
 
 Auditing Instructions:
 - Carefully read the draft.
+- Check the required language constraint. If it violates the language requirement, it is a VIOLATION.
 - If the draft suggests a diagnosis, prognosis, clinical cause, or specifies treatment details, it is a VIOLATION.
 - If the draft redirects clinical questions to a screening or evaluation without offering advice, it is SAFE.
 - Output exactly 'SAFE' if compliant.
@@ -438,11 +446,15 @@ Auditing Instructions:
             resultData = await search_patient(input as any);
           } else if (name === "verify_insurance") {
             resultData = await verify_insurance(input as any);
+            verifiedStatus = resultData.data.status;
           } else if (name === "lookup_policy") {
             resultData = await lookup_policy(input as any);
           } else if (name === "find_slots") {
             resultData = await find_slots(input as any);
           } else if (name === "hold_slot") {
+            if (verifiedStatus === "out_of_network" || verifiedStatus === "expired") {
+              throw new Error(`HoldSlotPolicyViolation: Cannot place a hold on slots because verified insurance status is '${verifiedStatus}'. Out-of-network/expired benefits reviews must be completed first.`);
+            }
             resultData = await hold_slot(input as any);
           } else if (name === "create_task") {
             resultData = await create_task(input as any);
@@ -495,10 +507,8 @@ Auditing Instructions:
     );
   }
 
-  // Retrieve exact tool calls logged for this item
   const toolsCalled = getToolCallsForItem(item.id);
 
-  // Option C: Safeguarding (P0) Communication Override (Zero Outbound Communication)
   let finalDraftReply = finalResult.draft_reply;
   if (
     finalResult.urgency === "P0" ||
